@@ -18,18 +18,34 @@ SliceUploadClient::~SliceUploadClient() {
 	}
 }
 
-bool SliceUploadClient::Upload(const std::string& scheme, const std::string& host, int port, const std::string& adminKey, const std::string& adminSecret, const std::string& filePath)
+bool SliceUploadClient::Upload(const std::string& url, const std::string& filePath, SliceUploadClientCallback callback)
+{
+	HttpRequestPtr req(new HttpRequest);
+	req->url = url;
+	req->ParseUrl();
+	int res = hv::parse_query_params(url.c_str(), req->query_params);
+	return res != -1 && Upload(req->scheme, req->host, req->port, req->query_params["adminKey"], req->query_params["timestamp"], req->query_params["signature"], filePath, callback);
+}
+
+bool SliceUploadClient::Upload(const std::string& scheme, const std::string& host, int port, const std::string& adminKey, const std::string& adminSecret, const std::string& filePath, SliceUploadClientCallback callback)
 {
 	std::string timestamp = GetTimestampMillStr();
 	std::string signature = GetSignature(adminKey, adminSecret, timestamp);
-	return Upload(scheme, host, port, adminKey, timestamp, signature, filePath);
+	return Upload(scheme, host, port, adminKey, timestamp, signature, filePath, callback);
 }
 
-bool SliceUploadClient::Upload(const std::string& scheme, const std::string& host, int port, const std::string& adminKey, const std::string& timestamp, const std::string& signature, const std::string& filePath) {
+bool SliceUploadClient::Upload(const std::string& scheme, const std::string& host, int port, const std::string& adminKey, const std::string& timestamp, const std::string& signature, const std::string& filePath, SliceUploadClientCallback callback) {
+	callback_ = callback;
+	
 	file_stream_.open(filePath, std::ios::binary | std::ios::in);
 
 	if (!file_stream_.is_open()) {
 		std::cout << "open file failed." << std::endl;
+		error_msg_ = "open file failed.";
+
+		if (callback_ != nullptr) {
+			callback_(this);
+		}
 		return false;
 	}
 
@@ -63,6 +79,10 @@ bool SliceUploadClient::Upload(const std::string& scheme, const std::string& hos
 	chunk_.filename = file_name_;
 	chunk_.content.resize(SLICE_BUFFER_SIZE);
 	// SendPost(http_client_);
+
+	processing_ = true;
+	error_msg_ = "";
+
 	GetUpLoadId();
 	return true;
 }
@@ -84,17 +104,31 @@ void SliceUploadClient::GetUpLoadId() {
 	http_client_.sendAsync(req, [this](const HttpResponsePtr& resp) {
 		if (resp == NULL) {
 			printf("request failed!\n");
+			error_msg_ = "get upload id failed.";
+			is_success_ = false;
+			Finish(false);
 			return;
 		}
 		else {
 			printf("%d %s\r\n", resp->status_code, resp->status_message());
 			printf("%s\n", Utf8ToGb2312(resp->body.c_str()));
 		}
+
 		hv::Json json;
 		std::string err;
 		int res = hv::parse_json(resp->body.c_str(), json, err);
 		if (res != 0) {
 			printf("parse json failed %d  %s \n", res, err.c_str());
+			error_msg_ = "get upload id failed. resp body parse failed.";
+			Finish(false);
+			return;
+		}
+
+		int code = json["code"].get<int>();
+
+		if (code != LARK_XR_API_SUCCESS_CODE) {
+			error_msg_ = "get upload id failed.";
+			Finish(false);
 			return;
 		}
 
@@ -142,16 +176,48 @@ void SliceUploadClient::SendPost() {
 	http_client_.sendAsync(req, [this](const HttpResponsePtr& resp) {
 		if (resp == NULL) {
 			printf("request failed!\n");
+			if (current_retry_ < FAILED_RETRY_TIME) {
+				SendPost();
+				return;
+			}
+			Finish(false);
+			return;
 		}
-		else {
-			printf("%d %s\r\n", resp->status_code, resp->status_message());
-			printf("%s\n", Utf8ToGb2312(resp->body.c_str()));
+		printf("%d %s\r\n", resp->status_code, resp->status_message());
+		printf("%s\n", Utf8ToGb2312(resp->body.c_str()));
+
+		hv::Json json;
+		std::string err;
+		int res = hv::parse_json(resp->body.c_str(), json, err);
+		if (res != 0) {
+			printf("parse json failed %d  %s \n", res, err.c_str());
+			if (current_retry_ < FAILED_RETRY_TIME) {
+				SendPost();
+				return;
+			}
+			Finish(false);
+			return;
 		}
+
+		int code = json["code"].get<int>();
+
+		if (code != LARK_XR_API_SUCCESS_CODE) {
+			if (current_retry_ < FAILED_RETRY_TIME) {
+				SendPost();
+				return;
+			}
+			Finish(false);
+			return;
+		}
+
+		current_retry_ = 0;
+
 		if (!is_last_chunk_) {
 			this->NextChunk();
 		}
 		else {
 			std::cout << "send success" << std::endl;
+			Finish(true);
 		}
 	});
 }
@@ -167,5 +233,23 @@ void SliceUploadClient::NextChunk() {
 	std::cout << "send next " << chunk_index_ << std::endl;
 
 	SendPost();
+}
+void SliceUploadClient::Finish(bool success)
+{
+	is_success_ = success;
+	finish_ = true;
+	processing_ = false;
+	current_retry_ = 0;
+	chunk_index_ = 0;
+	current_pos_ = 0;
+	last_size_ = 0;
+	chunk_start_ = 0;
+	is_last_chunk_ = false;
+	if (file_stream_.is_open()) {
+		file_stream_.close();
+	}
+	if (callback_) {
+		callback_(this);
+	}
 }
 }

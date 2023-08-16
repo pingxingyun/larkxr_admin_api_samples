@@ -22,4 +22,23 @@
 #endif
 #endif
 
+#define DC_CALL __stdcall
+
+#if defined( __cplusplus )
+extern "C" {
+#endif
+
+typedef struct lk_adminapi_SliceUploadClient;
+typedef void(*larkxr_adminapi_SliceUploadCallback)(int is_success, const char* msg);
+
+LARK_XR_API lk_adminapi_SliceUploadClient* DC_CALL lk_adminapi_CreateSliceUploadClient();
+
+LARK_XR_API void DC_CALL lk_adminapi_ReleaseSliceUploadClient(lk_adminapi_SliceUploadClient* client);
+
+LARK_XR_API void DC_CALL lk_adminapi_SliceUpload(lk_adminapi_SliceUploadClient* client, const char* url, const char* path, larkxr_adminapi_SliceUploadCallback callback);
+
+#if defined( __cplusplus )
+}
+#endif
+
 #endif // LARKXR_ADMINAPI_INCLUDE

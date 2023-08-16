@@ -45,12 +45,15 @@ inline static char* Gb2312ToUtf8(const char* gb2312)
     return str;
 }
 
+#ifdef WIN32
+
 typedef struct timeval {
     long tv_sec;
     long tv_usec;
 } timeval;
 
-int gettimeofday(struct timeval* tp, struct timezone* tzp)
+
+inline static int gettimeofday(struct timeval* tp, struct timezone* tzp)
 {
     // Note: some broken versions only have 8 trailing zero's, the correct epoch has 9 trailing zero's
     // This magic number is the number of 100 nanosecond intervals since January 1, 1601 (UTC)
@@ -70,6 +73,7 @@ int gettimeofday(struct timeval* tp, struct timezone* tzp)
     tp->tv_usec = (long)(system_time.wMilliseconds * 1000);
     return 0;
 }
+#endif // WIN32
 
 inline static uint64_t GetTimestampUs() {
     timeval tv;
